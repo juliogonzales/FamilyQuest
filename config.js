@@ -3,6 +3,6 @@
    A chave "anon public" (ou "publishable") foi feita para ficar no app: ela NÃO dá acesso de administrador.
    Enquanto estiver como "COLE_AQUI", o app funciona só no aparelho, sem contas. */
 window.FQ_CONFIG = {
-  SUPABASE_URL: 'COLE_AQUI',        // ex.: https://abcdefgh.supabase.co
-  SUPABASE_ANON_KEY: 'COLE_AQUI',   // ex.: eyJhbGciOi... (chave anon/publishable)
+  SUPABASE_URL: 'https://zxjqelirsmvibcysbspq.supabase.co/rest/v1/',        // ex.: https://abcdefgh.supabase.co
+  SUPABASE_ANON_KEY: 'sb_publishable_VWzIn7p9n2UIHmEbEITKSg_FOreyiaN',   // ex.: eyJhbGciOi... (chave anon/publishable)
 };
