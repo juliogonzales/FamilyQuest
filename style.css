@@ -1,0 +1,142 @@
+/* ===== FamilyQuest — estilos customizados (mobile-first) ===== */
+:root {
+  --brand: #7c3aed;
+  --brand-2: #ec4899;
+  --ok: #10b981;
+  --warn: #f59e0b;
+  --bad: #f43f5e;
+}
+
+* { -webkit-tap-highlight-color: transparent; }
+html, body { overscroll-behavior-y: contain; }
+
+.bg-app {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 10% 0%, #ede9fe 0, transparent 45%),
+    radial-gradient(circle at 100% 20%, #fce7f3 0, transparent 40%),
+    #f8fafc;
+  padding-top: env(safe-area-inset-top);
+}
+
+/* ---------- Cartões e botões ---------- */
+.card {
+  background: #fff;
+  border-radius: 1.25rem;
+  padding: 1rem;
+  box-shadow: 0 4px 14px rgba(124, 58, 237, .08), 0 1px 3px rgba(0, 0, 0, .05);
+  border: 1px solid rgba(124, 58, 237, .08);
+}
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: .4rem;
+  font-weight: 700; border-radius: 1rem; padding: .7rem 1rem;
+  transition: transform .12s ease, filter .12s ease, box-shadow .12s ease;
+  user-select: none; cursor: pointer; border: 0; font-size: .95rem;
+}
+.btn:active { transform: scale(.95); }
+.btn:disabled { opacity: .5; pointer-events: none; }
+.btn-primary { background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: #fff; box-shadow: 0 6px 16px rgba(124, 58, 237, .3); }
+.btn-ok { background: linear-gradient(135deg, #10b981, #34d399); color: #fff; box-shadow: 0 6px 16px rgba(16, 185, 129, .3); }
+.btn-danger { background: #fff1f2; color: #be123c; }
+.btn-ghost { background: #f1f5f9; color: #334155; }
+.btn-sm { padding: .45rem .75rem; font-size: .8rem; border-radius: .8rem; }
+.btn-block { width: 100%; }
+
+.chip {
+  display: inline-flex; align-items: center; gap: .25rem;
+  font-size: .72rem; font-weight: 700; padding: .2rem .6rem; border-radius: 999px;
+}
+
+.input {
+  width: 100%; background: #f8fafc; border: 2px solid #e2e8f0; border-radius: .9rem;
+  padding: .65rem .8rem; font-size: 1rem; outline: none; transition: border-color .15s;
+}
+.input:focus { border-color: var(--brand); background: #fff; }
+label.lbl { display: block; font-size: .75rem; font-weight: 700; color: #64748b; margin-bottom: .2rem; }
+
+/* ---------- Barras de progresso ---------- */
+.bar { height: .85rem; background: #e9e5f5; border-radius: 999px; overflow: hidden; position: relative; }
+.bar > i {
+  display: block; height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, #8b5cf6, #ec4899, #f59e0b);
+  background-size: 200% 100%;
+  transition: width .8s cubic-bezier(.22, 1, .36, 1);
+  animation: shine 3s linear infinite;
+}
+.bar.done > i { background: linear-gradient(90deg, #10b981, #34d399); }
+@keyframes shine { to { background-position: -200% 0; } }
+
+/* ---------- Navegação inferior ---------- */
+.bottom-nav {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  background: rgba(255, 255, 255, .92); backdrop-filter: blur(10px);
+  border-top: 1px solid #e9e5f5;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.nav-btn {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: .1rem;
+  padding: .5rem 0 .4rem; font-size: .68rem; font-weight: 700; color: #94a3b8;
+  position: relative; background: none; border: 0; cursor: pointer;
+}
+.nav-btn .ico { font-size: 1.35rem; transition: transform .2s; }
+.nav-btn.active { color: var(--brand); }
+.nav-btn.active .ico { transform: translateY(-2px) scale(1.15); }
+.badge {
+  position: absolute; top: .25rem; left: 55%; background: var(--bad); color: #fff;
+  font-size: .6rem; min-width: 1.1rem; height: 1.1rem; border-radius: 999px;
+  display: grid; place-items: center; padding: 0 .25rem; font-weight: 800;
+}
+
+/* ---------- Animações de gamificação ---------- */
+.fade-in { animation: fadeIn .35s ease both; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+.pop { animation: pop .4s cubic-bezier(.34, 1.56, .64, 1) both; }
+@keyframes pop { from { transform: scale(.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+/* Alerta visual de tarefa pendente prestes a expirar */
+.pulse-alert { animation: pulseAlert 1.4s ease-in-out infinite; border-color: rgba(244, 63, 94, .5); }
+@keyframes pulseAlert {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(244, 63, 94, .35); }
+  50% { box-shadow: 0 0 0 8px rgba(244, 63, 94, 0); }
+}
+
+.shake { animation: shake .4s; }
+@keyframes shake { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
+
+.wiggle { display: inline-block; animation: wiggle 2s ease-in-out infinite; }
+@keyframes wiggle { 0%, 100% { transform: rotate(-6deg); } 50% { transform: rotate(6deg); } }
+
+/* Destaque para avisos novos no feed */
+.is-new { border-left: 5px solid var(--brand-2); }
+
+/* ---------- Teclado do PIN ---------- */
+.pin-dot { width: 1rem; height: 1rem; border-radius: 999px; border: 2px solid #c4b5fd; transition: all .15s; }
+.pin-dot.on { background: var(--brand); border-color: var(--brand); transform: scale(1.15); }
+.key {
+  height: 4rem; border-radius: 1.2rem; background: #fff; font-size: 1.5rem; font-weight: 800;
+  color: #4c1d95; box-shadow: 0 3px 8px rgba(124, 58, 237, .12); border: 0; cursor: pointer;
+  transition: transform .1s;
+}
+.key:active { transform: scale(.92); background: #ede9fe; }
+
+/* ---------- Confete e Toast ---------- */
+#confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 100; }
+#toast {
+  position: fixed; left: 50%; bottom: calc(5.5rem + env(safe-area-inset-bottom)); transform: translateX(-50%) translateY(20px);
+  background: #1e1b4b; color: #fff; padding: .7rem 1.1rem; border-radius: 1rem; font-weight: 600; font-size: .9rem;
+  opacity: 0; pointer-events: none; transition: all .3s; z-index: 90; max-width: 90vw; text-align: center;
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* Preferência de movimento reduzido */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+
+/* Em telas grandes, simula um celular centralizado */
+@media (min-width: 640px) {
+  #app { max-width: 28rem; margin: 0 auto; }
+  .bottom-nav > div { max-width: 28rem; margin: 0 auto; }
+}

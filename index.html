@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#7c3aed" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>FamilyQuest</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <!-- Tailwind via CDN (o service worker guarda em cache para uso offline após o 1º acesso) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="bg-app text-slate-800 antialiased">
+  <!-- Toda a interface é renderizada por app.js dentro deste container (roteamento de telas) -->
+  <div id="app"></div>
+
+  <!-- Camada de confetes e avisos (toast) -->
+  <canvas id="confetti" aria-hidden="true"></canvas>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <noscript>Ative o JavaScript para usar o FamilyQuest.</noscript>
+  <script src="app.js"></script>
+</body>
+</html>

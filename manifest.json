@@ -1,0 +1,16 @@
+{
+  "name": "FamilyQuest — Tarefas da Família",
+  "short_name": "FamilyQuest",
+  "description": "Gestão gamificada de rotinas e tarefas domésticas com pontos e prêmios mensais.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f5f3ff",
+  "theme_color": "#7c3aed",
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
