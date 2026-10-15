@@ -64,8 +64,8 @@ const defaults = () => ({
   v: 1,
   settings: { pin: hashPin('1234'), penaltyPercent: 100, autoApprove: false },
   kids: [
-    { id: 'k1', name: 'Filha 1', avatar: '🦄', seen: [] },
-    { id: 'k2', name: 'Filha 2', avatar: '🐱', seen: [] },
+    { id: 'k1', name: 'Filha 1', avatar: '🦄', seen: [], pin: '' },
+    { id: 'k2', name: 'Filha 2', avatar: '🐱', seen: [], pin: '' },
   ],
   tasks: [],
   rewards: [
@@ -82,7 +82,7 @@ function migrate(d) {
   const out = Object.assign(base, d || {});
   out.settings = Object.assign(defaults().settings, (d && d.settings) || {});
   ['kids', 'tasks', 'rewards', 'ledger', 'notifications'].forEach((k) => { if (!Array.isArray(out[k])) out[k] = base[k]; });
-  out.kids.forEach((k) => { if (!Array.isArray(k.seen)) k.seen = []; });
+  out.kids.forEach((k) => { if (!Array.isArray(k.seen)) k.seen = []; if (typeof k.pin !== 'string') k.pin = ''; });
   return out;
 }
 
@@ -100,7 +100,7 @@ const Store = {
 };
 
 const S = () => Store.state;
-const kidOf = (id) => S().kids.find((k) => k.id === id) || { id, name: '?', avatar: '👤', seen: [] };
+const kidOf = (id) => S().kids.find((k) => k.id === id) || { id, name: '?', avatar: '👤', seen: [], pin: '' };
 const taskOf = (id) => S().tasks.find((t) => t.id === id);
 
 /* ---------- 4. Cálculo de pontos ---------- */
@@ -214,10 +214,12 @@ function confetti(n = 140) {
 }
 
 /* ---------- 6. Views ---------- */
-const ui = { tab: 'dash', kidTab: 'today', pin: '', pinError: false, filterKid: 'all', filterStatus: 'all' };
+const ui = { tab: 'dash', kidTab: 'today', pin: '', pinTarget: 'parent', pinError: false, filterKid: 'all', filterStatus: 'all' };
 const getSession = () => { try { return JSON.parse(sessionStorage.getItem('fq.session')); } catch { return null; } };
 const setSession = (s) => (s ? sessionStorage.setItem('fq.session', JSON.stringify(s)) : sessionStorage.removeItem('fq.session'));
-const getLock = () => { try { return JSON.parse(localStorage.getItem('fq.lock')) || { fails: 0, until: 0 }; } catch { return { fails: 0, until: 0 }; } };
+const lockKey = () => 'fq.lock.' + (ui.pinTarget || 'parent'); // bloqueio de tentativas separado por perfil
+const getLock = () => { try { return JSON.parse(localStorage.getItem(lockKey())) || { fails: 0, until: 0 }; } catch { return { fails: 0, until: 0 }; } };
+const setLock = (l) => localStorage.setItem(lockKey(), JSON.stringify(l));
 const lockLeft = () => Math.max(0, Math.ceil((getLock().until - Date.now()) / 1000));
 
 const STATUS = {
@@ -289,7 +291,7 @@ function viewProfiles() {
       ${S().kids.map((k) => `
         <button class="card w-full flex items-center gap-4 text-left active:scale-95 transition" data-act="loginKid" data-id="${k.id}">
           <span class="text-5xl">${esc(k.avatar)}</span>
-          <span><span class="block text-xl font-extrabold">${esc(k.name)}</span><span class="text-sm text-slate-500">⭐ ${Math.max(0, monthPts(k.id))} pts no mês</span></span>
+          <span><span class="block text-xl font-extrabold">${esc(k.name)}</span><span class="text-sm text-slate-500">⭐ ${Math.max(0, monthPts(k.id))} pts no mês${k.pin ? ' · 🔒' : ''}</span></span>
         </button>`).join('')}
       <button class="card w-full flex items-center gap-4 text-left active:scale-95 transition !bg-violet-50" data-act="loginParent">
         <span class="text-5xl">🔒</span>
@@ -310,7 +312,7 @@ function viewPin() {
   return `
   <div class="min-h-screen flex flex-col items-center justify-center p-6 fade-in">
     <div class="text-5xl">🔒</div>
-    <h2 class="text-2xl font-black mt-2">Área dos Pais</h2>
+    <h2 class="text-2xl font-black mt-2">${ui.pinTarget === 'parent' ? 'Área dos Pais' : `Oi, ${esc(kidOf(ui.pinTarget).name)}!`}</h2>
     <p class="text-slate-500 text-sm mb-6">${left > 0 ? `Muitas tentativas. Aguarde ${left}s` : ui.pinError ? '<span class="text-rose-600 font-bold">PIN incorreto, tente de novo</span>' : 'Digite o PIN de 4 dígitos'}</p>
     <div class="flex gap-4 mb-8 ${ui.pinError ? 'shake' : ''}">${dots}</div>
     <div class="grid grid-cols-3 gap-3 w-full max-w-xs ${left > 0 ? 'opacity-40 pointer-events-none' : ''}">${keys}</div>
@@ -454,8 +456,17 @@ function pSettings() {
     <button class="btn btn-primary btn-block">Salvar regras</button>
   </form>
 
+  <form data-form="kidPins" class="card space-y-3">
+    <h2 class="font-extrabold">🔒 Senha de cada filha</h2>
+    <p class="text-xs text-slate-500">Cada filha entra com a própria senha de 4 números. Deixe em branco para manter a atual.</p>
+    ${S().kids.map((k, i) => `<div><label class="lbl">${esc(k.avatar)} ${esc(k.name)} — ${k.pin ? 'senha definida' : 'sem senha'}</label>
+      <input class="input" name="kpin${i}" inputmode="numeric" pattern="\\d{4}" maxlength="4" placeholder="Nova senha (4 números)" autocomplete="off">
+      ${k.pin ? `<label class="flex items-center gap-2 text-xs font-semibold mt-1"><input type="checkbox" name="krm${i}" class="w-4 h-4"> Remover senha</label>` : ''}</div>`).join('')}
+    <button class="btn btn-primary btn-block">Salvar senhas</button>
+  </form>
+
   <form data-form="pin" class="card space-y-3">
-    <h2 class="font-extrabold">🔑 Alterar PIN</h2>
+    <h2 class="font-extrabold">🔑 Alterar PIN dos pais</h2>
     <div class="grid grid-cols-2 gap-2">
       <div><label class="lbl">Novo PIN</label><input class="input" name="pin1" inputmode="numeric" pattern="\\d{4}" maxlength="4" required placeholder="••••" autocomplete="off"></div>
       <div><label class="lbl">Confirmar</label><input class="input" name="pin2" inputmode="numeric" pattern="\\d{4}" maxlength="4" required placeholder="••••" autocomplete="off"></div>
@@ -564,21 +575,28 @@ function celebrate(kidId) {
 
 /* ---------- 7. Ações e formulários ---------- */
 const actions = {
-  loginKid: ({ id }) => { setSession({ role: 'kid', kidId: id }); ui.kidTab = 'today'; ui.screen = null; render(); },
-  loginParent: () => { ui.screen = 'pin'; ui.pin = ''; ui.pinError = false; render(); },
-  logout: () => { setSession(null); ui.screen = null; ui.pin = ''; render(); },
+  loginKid: ({ id }) => {
+    if (kidOf(id).pin) { ui.screen = 'pin'; ui.pinTarget = id; ui.pin = ''; ui.pinError = false; render(); return; } // filha com senha
+    setSession({ role: 'kid', kidId: id }); ui.kidTab = 'today'; ui.screen = null; render();
+  },
+  loginParent: () => { ui.screen = 'pin'; ui.pinTarget = 'parent'; ui.pin = ''; ui.pinError = false; render(); },
+  logout: () => { setSession(null); ui.screen = null; ui.pin = ''; ui.pinTarget = 'parent'; render(); },
   pinKey: ({ k }) => {
     if (lockLeft() > 0) return;
     ui.pinError = false;
     if (k === 'del') ui.pin = ui.pin.slice(0, -1); else if (ui.pin.length < 4) ui.pin += k;
     if (ui.pin.length === 4) {
-      if (hashPin(ui.pin) === S().settings.pin) {
-        localStorage.setItem('fq.lock', JSON.stringify({ fails: 0, until: 0 }));
-        setSession({ role: 'parent' }); ui.screen = null; ui.tab = 'dash'; ui.pin = '';
+      const isParent = ui.pinTarget === 'parent';
+      const expected = isParent ? S().settings.pin : kidOf(ui.pinTarget).pin;
+      if (expected && hashPin(ui.pin) === expected) {
+        setLock({ fails: 0, until: 0 });
+        if (isParent) { setSession({ role: 'parent' }); ui.tab = 'dash'; }
+        else { setSession({ role: 'kid', kidId: ui.pinTarget }); ui.kidTab = 'today'; }
+        ui.screen = null; ui.pin = '';
       } else {
         const l = getLock(); l.fails++;
         if (l.fails >= 3) { l.until = Date.now() + 30000; l.fails = 0; }
-        localStorage.setItem('fq.lock', JSON.stringify(l));
+        setLock(l);
         ui.pin = ''; ui.pinError = true;
       }
     }
@@ -636,6 +654,19 @@ const forms = {
     if (!/^\d{4}$/.test(d.pin1)) return toast('⚠️ O PIN deve ter 4 números');
     if (d.pin1 !== d.pin2) return toast('⚠️ Os PINs não conferem');
     S().settings.pin = hashPin(d.pin1); Store.save(); f.reset(); toast('🔑 PIN atualizado');
+  },
+  kidPins(d, f) {
+    const next = [];
+    for (let i = 0; i < S().kids.length; i++) {
+      const k = S().kids[i], v = (d['kpin' + i] || '').trim();
+      if (d['krm' + i] === 'on') { next.push(''); continue; }
+      if (v === '') { next.push(k.pin); continue; }
+      if (!/^\d{4}$/.test(v)) return toast('⚠️ A senha de ' + k.name + ' deve ter 4 números');
+      if (hashPin(v) === S().settings.pin) return toast('⚠️ A senha de ' + k.name + ' não pode ser igual à dos pais');
+      next.push(hashPin(v));
+    }
+    S().kids.forEach((k, i) => { k.pin = next[i]; });
+    Store.save(); f.reset(); toast('🔒 Senhas salvas'); render();
   },
 };
 
