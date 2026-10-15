@@ -9,7 +9,7 @@
    ===================================================================== */
 
 /* ---------- 1. Utilitários ---------- */
-const KEY = 'familyquest.v1';
+let KEY = 'familyquest.v1'; // com conta: 'familyquest.h.<id da casa>'
 const $ = (s, r = document) => r.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
@@ -49,19 +49,15 @@ const monthKey = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)
 
    Dica: ao receber estado remoto, resolva conflitos por `updatedAt` ou por entrada
    (ledger e notifications só crescem, então podem ser mesclados por id). */
-const Sync = {
-  push(/* state */) { /* TODO: enviar estado ao servidor (WebSocket/API/Supabase) */ },
-  receive(remote) { // chame quando chegar estado de outro aparelho
-    if (!remote || !Array.isArray(remote.tasks)) return;
-    Store.state = migrate(remote);
-    Store.persistOnly();
-    render();
-  },
-};
+// A sincronização é feita pelo módulo Cloud (Supabase) — veja a seção "Nuvem" mais abaixo.
+const Sync = { push() { Cloud.schedulePush(); } };
 
 /* ---------- 3. Estado + localStorage ---------- */
 const defaults = () => ({
   v: 1,
+  epoch: 0,        // sobe a cada "apagar tudo"/importação para valer sobre os outros aparelhos
+  deleted: [],     // ids excluídos (tarefas/prêmios): evita "ressuscitar" ao sincronizar
+  settingsUpd: '', // quando nomes/senhas/regras foram alterados por último
   settings: { pin: hashPin('1234'), penaltyPercent: 100, autoApprove: false },
   kids: [
     { id: 'k1', name: 'Filha 1', avatar: '🦄', seen: [], pin: '' },
@@ -81,7 +77,7 @@ function migrate(d) {
   const base = defaults();
   const out = Object.assign(base, d || {});
   out.settings = Object.assign(defaults().settings, (d && d.settings) || {});
-  ['kids', 'tasks', 'rewards', 'ledger', 'notifications'].forEach((k) => { if (!Array.isArray(out[k])) out[k] = base[k]; });
+  ['kids', 'tasks', 'rewards', 'ledger', 'notifications', 'deleted'].forEach((k) => { if (!Array.isArray(out[k])) out[k] = base[k]; });
   out.kids.forEach((k) => { if (!Array.isArray(k.seen)) k.seen = []; if (typeof k.pin !== 'string') k.pin = ''; });
   return out;
 }
@@ -116,17 +112,20 @@ function goalFor(kidId) {
 const level = (pts) => Math.max(1, Math.floor(Math.max(0, pts) / 100) + 1);
 
 /* ---------- 5. Regras de negócio ---------- */
+const touch = (t) => { t.upd = new Date().toISOString(); }; // marca a última alteração (usado ao mesclar aparelhos)
 function notify(type, text, extra = {}) {
-  S().notifications.unshift({ id: uid(), at: new Date().toISOString(), type, text, kidId: extra.kidId || null, taskId: extra.taskId || null, read: false });
+  if (extra.id && S().notifications.some((n) => n.id === extra.id)) return; // id fixo = não duplica entre aparelhos
+  S().notifications.unshift({ id: extra.id || uid(), at: new Date().toISOString(), type, text, kidId: extra.kidId || null, taskId: extra.taskId || null, read: false });
   S().notifications = S().notifications.slice(0, 300);
 }
 
-function addLedger(kidId, points, reason, type, taskId = null) {
+function addLedger(kidId, points, reason, type, taskId = null, id = null) {
+  if (id && S().ledger.some((l) => l.id === id)) return; // id fixo = nunca lança duas vezes (mesmo com 2 aparelhos)
   const before = monthPts(kidId);
-  S().ledger.push({ id: uid(), kidId, points, at: new Date().toISOString(), reason, type, taskId });
+  S().ledger.push({ id: id || uid(), kidId, points, at: new Date().toISOString(), reason, type, taskId });
   const after = monthPts(kidId);
   sortedRewards().forEach((r) => {
-    if (before < r.minPoints && after >= r.minPoints) notify('reward', `🎉 ${kidOf(kidId).name} desbloqueou "${r.name}" (${r.minPoints} pts)!`, { kidId });
+    if (before < r.minPoints && after >= r.minPoints) notify('reward', `🎉 ${kidOf(kidId).name} desbloqueou "${r.name}" (${r.minPoints} pts)!`, { kidId, id: `rw:${kidId}:${monthKey()}:${r.id}` });
   });
 }
 
@@ -138,7 +137,7 @@ function completeTask(id) {
   const t = taskOf(id);
   if (!t || t.status !== 'pending') return;
   if (new Date() > endOf(t)) { toast('⏰ O prazo dessa tarefa já acabou'); sweep(); render(); return; }
-  t.status = 'done';
+  t.status = 'done'; touch(t);
   t.doneAt = new Date().toISOString(); // hora exata do check-in
   notify('done', `✋ ${kidOf(t.kidId).name} concluiu "${t.title}" às ${fmtDateTime(t.doneAt).slice(6)}`, { kidId: t.kidId, taskId: t.id });
   if (S().settings.autoApprove) approveTask(id, true);
@@ -151,9 +150,9 @@ function completeTask(id) {
 function approveTask(id, auto = false) {
   const t = taskOf(id);
   if (!t || t.status !== 'done') return;
-  t.status = 'approved';
+  t.status = 'approved'; touch(t);
   t.approvedAt = new Date().toISOString();
-  addLedger(t.kidId, t.points, `Tarefa: ${t.title}`, 'task', t.id);
+  addLedger(t.kidId, t.points, `Tarefa: ${t.title}`, 'task', t.id, 'ok:' + t.id);
   notify('approved', `✅ "${t.title}" de ${kidOf(t.kidId).name} ${auto ? 'aprovada automaticamente' : 'aprovada'} (+${t.points} pts)`, { kidId: t.kidId, taskId: t.id });
   if (!auto) { Store.save(); toast('✅ Aprovada!'); render(); }
 }
@@ -161,7 +160,7 @@ function approveTask(id, auto = false) {
 function rejectTask(id) {
   const t = taskOf(id);
   if (!t || t.status !== 'done') return;
-  t.status = 'pending'; // volta para refazer (se ainda houver prazo)
+  t.status = 'pending'; touch(t); // volta para refazer (se ainda houver prazo)
   t.rejected = true;
   t.doneAt = null;
   notify('rejected', `↩️ "${t.title}" de ${kidOf(t.kidId).name} voltou para refazer`, { kidId: t.kidId, taskId: t.id });
@@ -173,10 +172,10 @@ function sweep() {
   const now = new Date(); let changed = false;
   S().tasks.forEach((t) => {
     if (t.status === 'pending' && now > endOf(t)) {
-      t.status = 'expired'; t.expiredAt = now.toISOString();
+      t.status = 'expired'; t.expiredAt = now.toISOString(); touch(t);
       const p = penaltyFor(t);
-      if (p > 0) addLedger(t.kidId, -p, `Penalidade: ${t.title}`, 'penalty', t.id);
-      notify('expired', `❌ "${t.title}" de ${kidOf(t.kidId).name} expirou sem conclusão${p > 0 ? ` (−${p} pts)` : ''}`, { kidId: t.kidId, taskId: t.id });
+      if (p > 0) addLedger(t.kidId, -p, `Penalidade: ${t.title}`, 'penalty', t.id, 'pen:' + t.id);
+      notify('expired', `❌ "${t.title}" de ${kidOf(t.kidId).name} expirou sem conclusão${p > 0 ? ` (−${p} pts)` : ''}`, { kidId: t.kidId, taskId: t.id, id: 'exp:' + t.id });
       changed = true;
     }
   });
@@ -298,6 +297,7 @@ function viewProfiles() {
         <span><span class="block text-xl font-extrabold">Pais / Gestores</span><span class="text-sm text-slate-500">Acesso com PIN</span></span>
       </button>
     </div>
+    ${Cloud.enabled ? `<p class="text-xs text-slate-400 mt-8">☁️ ${esc(Cloud.hname)}</p>` : ''}
   </div>`;
 }
 
@@ -436,6 +436,8 @@ function pFeed() {
 function pSettings() {
   const st = S().settings;
   return `
+  ${cloudCard()}
+
   <form data-form="adjust" class="card space-y-3">
     <h2 class="font-extrabold">🎯 Ajuste manual de pontos</h2>
     <div class="grid grid-cols-2 gap-2">
@@ -546,6 +548,7 @@ function kPrizes(kidId) {
 /* ---------- Render principal (roteamento de telas) ---------- */
 const appEl = () => $('#app');
 function render() {
+  if (Cloud.stage !== 'ready') { appEl().innerHTML = Cloud.view(); return; } // login / criar casa / carregando
   const y = window.scrollY, ses = getSession();
   let html;
   if (ui.screen === 'pin') html = viewPin();
@@ -575,6 +578,9 @@ function celebrate(kidId) {
 
 /* ---------- 7. Ações e formulários ---------- */
 const actions = {
+  authMode: () => { Cloud.mode = Cloud.mode === 'login' ? 'signup' : 'login'; Cloud.err = ''; Cloud.msg = ''; render(); },
+  cloudSignOut: () => { if (confirm('Sair da conta neste aparelho? Os dados continuam salvos na nuvem.')) Cloud.signOut(); },
+  cloudInvite: () => Cloud.createInvite(),
   loginKid: ({ id }) => {
     if (kidOf(id).pin) { ui.screen = 'pin'; ui.pinTarget = id; ui.pin = ''; ui.pinError = false; render(); return; } // filha com senha
     setSession({ role: 'kid', kidId: id }); ui.kidTab = 'today'; ui.screen = null; render();
@@ -608,8 +614,8 @@ const actions = {
   complete: ({ id }) => { if (confirm('Marcar esta tarefa como concluída?')) completeTask(id); },
   approve: ({ id }) => approveTask(id),
   reject: ({ id }) => rejectTask(id),
-  delTask: ({ id }) => { if (!confirm('Excluir esta tarefa?')) return; S().tasks = S().tasks.filter((t) => t.id !== id); Store.save(); render(); },
-  delReward: ({ id }) => { if (!confirm('Excluir este prêmio?')) return; S().rewards = S().rewards.filter((r) => r.id !== id); Store.save(); render(); },
+  delTask: ({ id }) => { if (!confirm('Excluir esta tarefa?')) return; S().tasks = S().tasks.filter((t) => t.id !== id); S().deleted.push(id); Store.save(); render(); },
+  delReward: ({ id }) => { if (!confirm('Excluir este prêmio?')) return; S().rewards = S().rewards.filter((r) => r.id !== id); S().deleted.push(id); Store.save(); render(); },
   clearFeed: () => { if (!confirm('Limpar todas as notificações?')) return; S().notifications = []; Store.save(); render(); },
   export: () => {
     const blob = new Blob([JSON.stringify(S(), null, 2)], { type: 'application/json' });
@@ -617,23 +623,31 @@ const actions = {
   },
   reset: () => {
     if (!confirm('Apagar TODOS os dados (tarefas, pontos, prêmios, PIN)? Isso não pode ser desfeito.')) return;
-    localStorage.removeItem(KEY); Store.load(); Store.save(); toast('Dados apagados'); render();
+    const ep = (S().epoch || 0) + 1; // epoch maior = vale sobre os outros aparelhos
+    localStorage.removeItem(KEY); Store.load(); S().epoch = ep; Store.save(); toast('Dados apagados'); render();
   },
 };
 
 const forms = {
+  auth(d) {
+    Cloud.email = (d.email || '').trim(); Cloud.err = '';
+    Cloud.msg = Cloud.mode === 'login' ? 'Entrando…' : 'Criando conta…'; render();
+    return Cloud.mode === 'login' ? Cloud.signIn(Cloud.email, d.password) : Cloud.signUp(Cloud.email, d.password);
+  },
+  houseCreate(d) { return Cloud.createHousehold((d.name || '').trim()); },
+  houseJoin(d) { return Cloud.joinHousehold((d.code || '').trim()); },
   taskNew(d, f) {
     if (d.end <= d.start) return toast('⚠️ O fim da janela deve ser depois do início');
     const kids = d.kidId === 'all' ? S().kids.map((k) => k.id) : [d.kidId];
     kids.forEach((kidId) => {
-      const t = { id: uid(), title: d.title.trim(), desc: (d.desc || '').trim(), emoji: (d.emoji || '📝').trim(), kidId, date: d.date, start: d.start, end: d.end, points: Math.max(1, parseInt(d.points, 10) || 1), status: 'pending', createdAt: new Date().toISOString() };
+      const t = { id: uid(), title: d.title.trim(), desc: (d.desc || '').trim(), emoji: (d.emoji || '📝').trim(), kidId, date: d.date, start: d.start, end: d.end, points: Math.max(1, parseInt(d.points, 10) || 1), status: 'pending', createdAt: new Date().toISOString(), upd: new Date().toISOString() };
       S().tasks.push(t);
       notify('new', `🆕 Tarefa "${t.title}" criada para ${kidOf(kidId).name}`, { kidId, taskId: t.id });
     });
     Store.save(); f.reset(); toast('✅ Tarefa criada!'); render();
   },
   rewardNew(d, f) {
-    S().rewards.push({ id: uid(), name: d.name.trim(), emoji: (d.emoji || '🎁').trim(), minPoints: Math.max(1, parseInt(d.minPoints, 10) || 1) });
+    S().rewards.push({ id: uid(), name: d.name.trim(), emoji: (d.emoji || '🎁').trim(), minPoints: Math.max(1, parseInt(d.minPoints, 10) || 1), upd: new Date().toISOString() });
     Store.save(); f.reset(); toast('🎁 Prêmio cadastrado!'); render();
   },
   adjust(d, f) {
@@ -646,14 +660,14 @@ const forms = {
   },
   settings(d) {
     S().settings.penaltyPercent = Math.max(0, Math.min(300, parseInt(d.penaltyPercent, 10) || 0));
-    S().settings.autoApprove = d.autoApprove === 'on';
+    S().settings.autoApprove = d.autoApprove === 'on'; S().settingsUpd = new Date().toISOString();
     S().kids.forEach((k, i) => { k.name = (d['name' + i] || k.name).trim(); k.avatar = d['avatar' + i] || k.avatar; });
     Store.save(); toast('💾 Regras salvas'); render();
   },
   pin(d, f) {
     if (!/^\d{4}$/.test(d.pin1)) return toast('⚠️ O PIN deve ter 4 números');
     if (d.pin1 !== d.pin2) return toast('⚠️ Os PINs não conferem');
-    S().settings.pin = hashPin(d.pin1); Store.save(); f.reset(); toast('🔑 PIN atualizado');
+    S().settings.pin = hashPin(d.pin1); S().settingsUpd = new Date().toISOString(); Store.save(); f.reset(); toast('🔑 PIN atualizado');
   },
   kidPins(d, f) {
     const next = [];
@@ -665,7 +679,7 @@ const forms = {
       if (hashPin(v) === S().settings.pin) return toast('⚠️ A senha de ' + k.name + ' não pode ser igual à dos pais');
       next.push(hashPin(v));
     }
-    S().kids.forEach((k, i) => { k.pin = next[i]; });
+    S().kids.forEach((k, i) => { k.pin = next[i]; }); S().settingsUpd = new Date().toISOString();
     Store.save(); f.reset(); toast('🔒 Senhas salvas'); render();
   },
 };
@@ -689,7 +703,7 @@ document.addEventListener('change', (e) => {
       const data = JSON.parse(r.result);
       if (!data || !Array.isArray(data.tasks) || !Array.isArray(data.kids)) throw new Error('formato');
       if (!confirm('Importar este backup e substituir os dados atuais?')) return;
-      Store.state = migrate(data); Store.save(); toast('✅ Backup importado'); render();
+      const ep = (S().epoch || 0) + 1; Store.state = migrate(data); S().epoch = ep; Store.save(); toast('✅ Backup importado'); render();
     } catch { toast('⚠️ Arquivo de backup inválido'); }
   };
   r.readAsText(file);
@@ -701,24 +715,330 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'Backspace') actions.pinKey({ k: 'del' });
 });
 
+/* ---------- Nuvem (Supabase): contas, casas e sincronização ----------
+   Modelo: cada "casa" (household) guarda todo o estado do app em uma linha (coluna jsonb `state`).
+   Quem é membro da casa (tabela members) lê e grava; as regras de segurança (RLS) do banco
+   impedem que uma família veja os dados de outra. Veja setup.sql.
+
+   Sincronização: cada gravação usa um número de versão (rev). Se dois aparelhos gravarem ao
+   mesmo tempo, o segundo recebe "conflito", busca a versão do servidor, MESCLA (mergeStates) e grava
+   de novo. Mudanças chegam aos outros aparelhos por Realtime e, como reserva, a cada 30 s.
+
+   Próximos passos de produto (ideias): várias casas por usuário, penalidade rodando no servidor
+   (pg_cron/Edge Function), senha das filhas conferida no servidor, tabelas separadas por entidade. */
+
+// Serialização estável (chaves ordenadas) para comparar estados sem falso "diferente"
+const canon = (o) => JSON.stringify(o, (k, v) => (v && typeof v === 'object' && !Array.isArray(v)
+  ? Object.fromEntries(Object.entries(v).sort(([x], [y]) => (x < y ? -1 : 1))) : v));
+
+/* Mescla o estado local (a) com o do servidor (b).
+   - epoch maior (apagar tudo / importar backup) vence por inteiro;
+   - tarefas e prêmios: união por id; em conflito vence o `upd` mais recente; `deleted` evita ressuscitar;
+   - pontos (ledger) e avisos: só crescem, união por id (penalidades têm id fixo e não duplicam);
+   - nomes/senhas/regras: vence quem alterou por último (settingsUpd). */
+function mergeStates(a, b) {
+  a = migrate(JSON.parse(JSON.stringify(a)));
+  b = migrate(JSON.parse(JSON.stringify(b)));
+  if ((b.epoch || 0) > (a.epoch || 0)) return b;
+  if ((a.epoch || 0) > (b.epoch || 0)) return a;
+  const del = new Set([...(a.deleted || []), ...(b.deleted || [])]);
+  const out = b;
+  out.deleted = [...del].slice(-1000);
+  const byUpd = (la, lb) => {
+    const m = new Map();
+    lb.forEach((x) => m.set(x.id, x));
+    la.forEach((x) => { const y = m.get(x.id); if (!y || (x.upd || '') > (y.upd || '')) m.set(x.id, x); });
+    return [...m.values()].filter((x) => !del.has(x.id)).sort((p, q) => (p.id < q.id ? -1 : 1));
+  };
+  const byId = (la, lb) => {
+    const m = new Map();
+    lb.forEach((x) => m.set(x.id, x));
+    la.forEach((x) => { const y = m.get(x.id); if (!y) m.set(x.id, x); else if (x.read) y.read = true; });
+    return [...m.values()];
+  };
+  out.tasks = byUpd(a.tasks, b.tasks);
+  out.rewards = byUpd(a.rewards, b.rewards);
+  out.ledger = byId(a.ledger, b.ledger).sort((p, q) => ((p.at + p.id) < (q.at + q.id) ? -1 : 1));
+  out.notifications = byId(a.notifications, b.notifications).sort((p, q) => ((p.at + p.id) < (q.at + q.id) ? 1 : -1)).slice(0, 300);
+  if ((a.settingsUpd || '') > (b.settingsUpd || '')) { out.kids = a.kids; out.settings = a.settings; out.settingsUpd = a.settingsUpd; }
+  out.kids.forEach((k) => { // "já vi o confete" é por aparelho: mantém a união
+    const lk = a.kids.find((x) => x.id === k.id);
+    if (lk) k.seen = [...new Set([...(k.seen || []), ...(lk.seen || [])])].sort();
+  });
+  return out;
+}
+
+const friendly = (m) => {
+  m = String(m || '');
+  if (/Invalid login/i.test(m)) return 'E-mail ou senha incorretos.';
+  if (/already registered/i.test(m)) return 'Este e-mail já tem conta. Toque em "Entrar".';
+  if (/not confirmed/i.test(m)) return 'Confirme seu e-mail (link enviado quando criou a conta) e tente de novo.';
+  if (/Password should be/i.test(m)) return 'A senha precisa ter pelo menos 6 caracteres.';
+  if (/Convite inválido/i.test(m)) return 'Convite inválido ou expirado.';
+  if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return 'Sem conexão com a internet.';
+  return m;
+};
+
+const Cloud = {
+  enabled: false, sb: null, stage: 'ready', // 'loading' | 'auth' | 'house' | 'error' | 'ready'
+  user: null, hid: null, hname: '', rev: 0,
+  mode: 'login', email: '', err: '', msg: '', inviteCode: '',
+  status: 'ok', ch: null, pushing: false, again: false, timer: null,
+
+  setup() {
+    const c = window.FQ_CONFIG || {};
+    const configured = /^https:\/\//.test(c.SUPABASE_URL || '') && (c.SUPABASE_ANON_KEY || '').length > 20;
+    if (!configured) { this.enabled = false; this.stage = 'ready'; return false; } // modo local (sem contas)
+    this.enabled = true;
+    if (!window.supabase) { this.stage = 'error'; return true; }
+    this.sb = window.supabase.createClient(c.SUPABASE_URL, c.SUPABASE_ANON_KEY);
+    this.stage = 'loading';
+    return true;
+  },
+
+  async restore() {
+    if (!this.enabled || this.stage !== 'loading') { if (this.stage === 'error') render(); return; }
+    try {
+      const { data } = await this.sb.auth.getSession();
+      if (data && data.session) { this.user = data.session.user; await this.loadHousehold(); }
+      else { this.stage = 'auth'; render(); }
+    } catch (e) { this.err = friendly(e.message); this.stage = 'auth'; render(); }
+  },
+
+  async signIn(email, password) {
+    const { data, error } = await this.sb.auth.signInWithPassword({ email, password });
+    if (error) { this.err = friendly(error.message); this.msg = ''; render(); return; }
+    this.user = data.user; this.err = ''; this.msg = '';
+    await this.loadHousehold();
+  },
+
+  async signUp(email, password) {
+    const { data, error } = await this.sb.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname } });
+    if (error) { this.err = friendly(error.message); this.msg = ''; render(); return; }
+    if (data.session) { this.user = data.user; this.err = ''; this.msg = ''; await this.loadHousehold(); return; }
+    this.mode = 'login'; this.err = '';
+    this.msg = 'Conta criada! Abra o link que enviamos para o seu e-mail e depois entre aqui.';
+    render();
+  },
+
+  async signOut() {
+    try { await this.sb.auth.signOut(); } catch (e) { /* segue mesmo sem internet */ }
+    if (this.ch) { try { this.sb.removeChannel(this.ch); } catch (e) { /* ok */ } this.ch = null; }
+    clearTimeout(this.timer);
+    this.user = null; this.hid = null; this.hname = ''; this.rev = 0; this.inviteCode = '';
+    setSession(null); ui.screen = null; ui.pin = '';
+    try { localStorage.removeItem('fq.last'); } catch (e) { /* ok */ }
+    KEY = 'familyquest.v1'; Store.load();
+    this.mode = 'login'; this.err = ''; this.msg = ''; this.stage = 'auth';
+    render();
+  },
+
+  async loadHousehold() {
+    this.stage = 'loading'; render();
+    const last = (() => { try { return JSON.parse(localStorage.getItem('fq.last')); } catch { return null; } })();
+    let rows = null, error = null;
+    try {
+      ({ data: rows, error } = await this.sb.from('members').select('household_id, households(name)').eq('user_id', this.user.id).limit(1));
+    } catch (e) { error = e; }
+    if (error) {
+      if (last && last.uid === this.user.id) { await this.open(last.hid, last.name); return; } // sem internet: usa o último cache
+      this.err = friendly(error.message); this.stage = 'house'; render(); return;
+    }
+    if (!rows || !rows.length) { this.stage = 'house'; render(); return; }
+    await this.open(rows[0].household_id, rows[0].households && rows[0].households.name);
+  },
+
+  async open(hid, name) {
+    this.hid = hid; this.hname = name || 'Minha casa';
+    KEY = 'familyquest.h.' + hid;
+    const had = localStorage.getItem(KEY) !== null;
+    Store.load(); // cache local desta casa (ou padrão)
+    let row = null, error = null;
+    try { ({ data: row, error } = await this.sb.from('households').select('state, rev').eq('id', hid).single()); }
+    catch (e) { error = e; }
+    if (error || !row) {
+      if (!had) { this.err = friendly(error && error.message) || 'Não foi possível carregar a casa.'; this.hid = null; KEY = 'familyquest.v1'; Store.load(); this.stage = 'house'; render(); return; }
+      this.status = 'offline'; // segue com o cache
+    } else {
+      this.rev = row.rev; this.status = 'ok';
+      const remote = row.state || {};
+      if (Array.isArray(remote.tasks)) Store.state = had ? mergeStates(Store.state, remote) : migrate(remote);
+      Store.persistOnly();
+      if (canon(Store.state) !== canon(migrate(remote))) this.schedulePush();
+    }
+    try { localStorage.setItem('fq.last', JSON.stringify({ uid: this.user.id, hid, name: this.hname })); } catch (e) { /* ok */ }
+    this.subscribe();
+    this.stage = 'ready'; ui.screen = null;
+    sweep();
+    render();
+  },
+
+  subscribe() {
+    try {
+      if (this.ch) this.sb.removeChannel(this.ch);
+      this.ch = this.sb.channel('hh-' + this.hid)
+        .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'households', filter: 'id=eq.' + this.hid }, (p) => this.onRemote(p.new))
+        .subscribe();
+    } catch (e) { console.warn('realtime indisponível, usando atualização periódica', e); }
+  },
+
+  onRemote(row) {
+    if (!row || !row.state || row.rev <= this.rev) return;
+    this.rev = row.rev;
+    const merged = mergeStates(Store.state, row.state);
+    Store.state = merged; Store.persistOnly();
+    if (canon(merged) !== canon(migrate(row.state))) this.schedulePush();
+    if (typeof isTyping === 'function' && !isTyping()) render();
+  },
+
+  async pull() { // reserva caso o tempo real falhe
+    if (this.stage !== 'ready' || !this.hid || this.pushing) return;
+    try {
+      const { data, error } = await this.sb.from('households').select('state, rev').eq('id', this.hid).single();
+      if (!error && data && data.rev > this.rev) this.onRemote(data);
+      if (!error) this.status = 'ok';
+    } catch (e) { this.status = 'offline'; }
+  },
+
+  schedulePush() {
+    if (!this.enabled || !this.hid) return;
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.doPush(), 500);
+  },
+
+  async doPush() {
+    if (!this.hid) return;
+    if (this.pushing) { this.again = true; return; }
+    this.pushing = true; this.status = 'sync';
+    try {
+      const { data, error } = await this.sb.from('households').update({ state: Store.state }).eq('id', this.hid).eq('rev', this.rev).select('rev');
+      if (error) throw error;
+      if (data && data.length) { this.rev = data[0].rev; this.status = 'ok'; }
+      else { // conflito: outro aparelho gravou antes → mescla e tenta de novo
+        const r = await this.sb.from('households').select('state, rev').eq('id', this.hid).single();
+        if (r.error) throw r.error;
+        this.rev = r.data.rev;
+        Store.state = mergeStates(Store.state, r.data.state); Store.persistOnly();
+        this.again = true;
+        if (!isTyping()) render();
+      }
+    } catch (e) {
+      this.status = 'offline'; console.warn('sync', e);
+      setTimeout(() => this.schedulePush(), 15000); // tenta de novo quando a conexão voltar
+    } finally {
+      this.pushing = false;
+      if (this.again) { this.again = false; this.schedulePush(); }
+    }
+  },
+
+  async createHousehold(name) {
+    this.err = ''; this.msg = 'Criando sua casa…'; render();
+    const { data, error } = await this.sb.rpc('create_household', { p_name: name, p_state: Store.state });
+    this.msg = '';
+    if (error) { this.err = friendly(error.message); render(); return; }
+    await this.open(data, name);
+  },
+
+  async joinHousehold(code) {
+    this.err = ''; this.msg = 'Entrando na casa…'; render();
+    const { data, error } = await this.sb.rpc('join_household', { p_code: code });
+    this.msg = '';
+    if (error) { this.err = friendly(error.message); render(); return; }
+    await this.loadHousehold();
+  },
+
+  async createInvite() {
+    const { data, error } = await this.sb.rpc('create_invite', { p_household: this.hid });
+    if (error) { toast('⚠️ ' + friendly(error.message)); return; }
+    this.inviteCode = data; render();
+  },
+
+  view() {
+    if (this.stage === 'loading') return '<div class="min-h-screen flex flex-col items-center justify-center p-6"><div class="text-6xl wiggle">🏆</div><p class="mt-3 font-bold text-slate-500">Carregando…</p></div>';
+    if (this.stage === 'error') return '<div class="min-h-screen flex flex-col items-center justify-center p-6 text-center"><div class="text-5xl">📡</div><p class="mt-3 font-bold">Não consegui carregar o serviço de nuvem.</p><p class="text-sm text-slate-500 mt-1">Verifique a internet e tente de novo.</p><button class="btn btn-primary mt-4" onclick="location.reload()">Recarregar</button></div>';
+    return this.stage === 'auth' ? viewAuth() : viewHouse();
+  },
+};
+
+function viewAuth() {
+  const login = Cloud.mode === 'login';
+  return `
+  <div class="min-h-screen flex flex-col items-center justify-center p-6 fade-in">
+    <div class="text-6xl wiggle">🏆</div>
+    <h1 class="text-4xl font-black mt-2 bg-gradient-to-r from-violet-600 to-pink-500 bg-clip-text text-transparent">FamilyQuest</h1>
+    <p class="text-slate-500 mt-1 mb-6 font-semibold text-center">${login ? 'Entre na sua conta de gestor' : 'Crie sua conta de gestor'}</p>
+    <form data-form="auth" class="card w-full max-w-xs space-y-3">
+      <div><label class="lbl">E-mail</label><input class="input" type="email" name="email" required autocomplete="email" value="${esc(Cloud.email)}"></div>
+      <div><label class="lbl">Senha</label><input class="input" type="password" name="password" required minlength="6" autocomplete="${login ? 'current-password' : 'new-password'}" placeholder="mínimo 6 caracteres"></div>
+      ${Cloud.err ? `<p class="text-sm text-rose-600 font-semibold">${esc(Cloud.err)}</p>` : ''}
+      ${Cloud.msg ? `<p class="text-sm text-emerald-600 font-semibold">${esc(Cloud.msg)}</p>` : ''}
+      <button class="btn btn-primary btn-block">${login ? 'Entrar' : 'Criar conta'}</button>
+    </form>
+    <button class="mt-4 text-sm font-bold text-violet-600" data-act="authMode">${login ? 'Ainda não tenho conta' : 'Já tenho conta — entrar'}</button>
+    <p class="text-xs text-slate-400 mt-6 text-center max-w-xs">A conta é só dos pais/gestores. As filhas entram pelo perfil delas, com a senha de 4 números.</p>
+  </div>`;
+}
+
+function viewHouse() {
+  return `
+  <div class="min-h-screen flex flex-col items-center justify-center p-6 fade-in">
+    <div class="text-5xl">🏠</div>
+    <h1 class="text-2xl font-black mt-2">Vamos configurar sua casa</h1>
+    <p class="text-slate-500 text-sm mb-5">${esc(Cloud.user ? Cloud.user.email : '')}</p>
+    ${Cloud.err ? `<p class="text-sm text-rose-600 font-semibold mb-2 text-center max-w-xs">${esc(Cloud.err)}</p>` : ''}
+    ${Cloud.msg ? `<p class="text-sm text-emerald-600 font-semibold mb-2">${esc(Cloud.msg)}</p>` : ''}
+    <form data-form="houseCreate" class="card w-full max-w-xs space-y-3">
+      <h2 class="font-extrabold">Criar minha casa</h2>
+      <div><label class="lbl">Nome da casa</label><input class="input" name="name" required maxlength="40" placeholder="Casa dos Gonzales"></div>
+      <button class="btn btn-primary btn-block">Criar casa</button>
+      <p class="text-xs text-slate-400">As tarefas, nomes e prêmios que já estão neste aparelho vão para a casa nova.</p>
+    </form>
+    <p class="text-xs font-bold text-slate-400 my-3">OU</p>
+    <form data-form="houseJoin" class="card w-full max-w-xs space-y-3">
+      <h2 class="font-extrabold">Entrar numa casa existente</h2>
+      <div><label class="lbl">Código de convite</label><input class="input uppercase tracking-widest" name="code" required maxlength="12" autocomplete="off" placeholder="ABC123DEF4"></div>
+      <button class="btn btn-ghost btn-block">Entrar com convite</button>
+    </form>
+    <button class="mt-5 text-sm font-bold text-slate-500" data-act="cloudSignOut">Sair da conta</button>
+  </div>`;
+}
+
+function cloudCard() {
+  if (!Cloud.enabled) return '';
+  const st = { ok: '✅ Sincronizado', sync: '🔄 Sincronizando…', offline: '⚠️ Sem conexão — salvo no aparelho e sincroniza depois' }[Cloud.status] || '';
+  return `
+  <div class="card space-y-2">
+    <h2 class="font-extrabold">☁️ Conta e casa</h2>
+    <p class="text-sm font-bold">${esc(Cloud.hname)}</p>
+    <p class="text-xs text-slate-500">${esc(Cloud.user ? Cloud.user.email : '')} · ${st}</p>
+    <button class="btn btn-ghost btn-sm btn-block" data-act="cloudInvite">👥 Convidar outro gestor</button>
+    ${Cloud.inviteCode ? `<div class="rounded-xl bg-violet-50 p-3 text-center"><div class="text-xs text-slate-500">Código de convite (uso único, vale 7 dias)</div><div class="text-2xl font-black tracking-widest select-all">${esc(Cloud.inviteCode)}</div><div class="text-xs text-slate-500 mt-1">A pessoa cria a conta, escolhe "Entrar numa casa existente" e digita este código.</div></div>` : ''}
+    <button class="btn btn-danger btn-sm btn-block" data-act="cloudSignOut">Sair da conta</button>
+  </div>`;
+}
+
 /* ---------- 8. Inicialização / PWA ---------- */
 const isTyping = () => { const a = document.activeElement; return a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName); };
 
 function tick() {
+  if (Cloud.stage !== 'ready') return;
   sweep();
+  Cloud.pull(); // reserva do tempo real
   if (!isTyping()) render(); // atualiza contagens regressivas e alertas
 }
 
 function init() {
   Store.load();
-  sweep();
+  Cloud.setup();
+  if (Cloud.stage === 'ready') sweep();
   // Multi-aba / multi-janela no mesmo aparelho: reflete mudanças feitas em outra aba.
   // (Entre aparelhos diferentes, use a camada Sync acima.)
   window.addEventListener('storage', (e) => { if (e.key === KEY) { Store.load(); if (!isTyping()) render(); } });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { sweep(); if (!isTyping()) render(); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && Cloud.stage === 'ready') { sweep(); Cloud.pull(); if (!isTyping()) render(); } });
   setInterval(tick, 30000);                                   // varredura de penalidades + contagem regressiva
   setInterval(() => { if (ui.screen === 'pin' && lockLeft() >= 0 && getLock().until) render(); }, 1000); // contagem do bloqueio do PIN
   render();
+  Cloud.restore();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('service-worker.js').catch((e) => console.warn('SW falhou', e));
 }
 init();
